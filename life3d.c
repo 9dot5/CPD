@@ -1,16 +1,29 @@
+/*
+    File: life3d.c
+    Description: An implementation of Game of Life 3D (Serial version)
+    Authors: Group 22
+    Course: Parallel and Distributed Computing - 2023/2024
+*/
+
+#include <omp.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <inttypes.h> // For 64-bit integers
 
 #define N_SPECIES 9
 
+/*
+    Generate the initial grid
+*/
+
 unsigned int seed;
 
-void init_r4uni(int input_seed) {
+void init_r4uni(int input_seed)
+{
     seed = input_seed + 987654321;
 }
 
-float r4_uni() {
+float r4_uni()
+{
     int seed_in = seed;
 
     seed ^= (seed << 13);
@@ -20,29 +33,26 @@ float r4_uni() {
     return 0.5 + 0.2328306e-09 * (seed_in + (int) seed);
 }
 
-// Function to generate the initial grid
-char ***gen_initial_grid(long long N, float density, int input_seed) {
+char ***gen_initial_grid(long long N, float density, int input_seed)
+{
     int x, y, z;
 
-    char ***grid = malloc(N * sizeof(char **));
-    if (grid == NULL) {
-        fprintf(stderr, "Failed to allocate grid\n");
-        exit(EXIT_FAILURE);
+    char ***grid = (char ***) malloc(N * sizeof(char **));
+    if(grid == NULL) {
+        printf("Failed to allocate matrix\n");
+        exit(1);
     }
-
-    for (x = 0; x < N; x++) {
-        grid[x] = malloc(N * sizeof(char *));
-        if (grid[x] == NULL) {
-            fprintf(stderr, "Failed to allocate grid\n");
-            exit(EXIT_FAILURE);
+    for(x = 0; x < N; x++) {
+        grid[x] = (char **) malloc(N * sizeof(char *));
+        if(grid[x] == NULL) {
+            printf("Failed to allocate matrix\n");
+            exit(1);
         }
-
-        grid[x][0] = calloc(N * N, sizeof(char));
-        if (grid[x][0] == NULL) {
-            fprintf(stderr, "Failed to allocate grid\n");
-            exit(EXIT_FAILURE);
+        grid[x][0] = (char *) calloc(N * N, sizeof(char));
+        if(grid[x][0] == NULL) {
+            printf("Failed to allocate matrix\n");
+            exit(1);
         }
-
         for (y = 1; y < N; y++)
             grid[x][y] = grid[x][0] + y * N;
     }
@@ -51,192 +61,253 @@ char ***gen_initial_grid(long long N, float density, int input_seed) {
     for (x = 0; x < N; x++)
         for (y = 0; y < N; y++)
             for (z = 0; z < N; z++)
-                if (r4_uni() < density)
+                if(r4_uni() < density)
                     grid[x][y][z] = (int)(r4_uni() * N_SPECIES) + 1;
 
     return grid;
 }
 
-// Function to count neighbors
-void count_neighbors(char ***grid, long long N, int x, int y, int z, int64_t *neighbor_counts) {
-    for (int dx = -1; dx <= 1; dx++) {
-        for (int dy = -1; dy <= 1; dy++) {
-            for (int dz = -1; dz <= 1; dz++) {
-                if (dx == 0 && dy == 0 && dz == 0)
-                    continue;
-                int nx = (x + dx + N) % N;
-                int ny = (y + dy + N) % N;
-                int nz = (z + dz + N) % N;
-                if (grid[nx][ny][nz] == grid[x][y][z]) {
-                    neighbor_counts[grid[nx][ny][nz] - 1]++;
-                }
+/*
+    Run the simulation
+*/
+
+int debug = 0;
+
+void count_neighbors(char ***grid, int cells, int x, int y, int z, int *species, int *alive_count, int *most_common_value) {
+    int count = 0;
+    
+    for (int i = -1; i <= 1; i++) {
+        for (int j = -1; j <= 1; j++) {
+            for (int k = -1; k <= 1; k++) {
+
+                if (i == 0 && j == 0 && k == 0) continue;
+
+                int new_x = (x + i + cells) % cells;
+                int new_y = (y + j + cells) % cells;
+                int new_z = (z + k + cells) % cells;
+
+                int neighbor_value = grid[new_x][new_y][new_z];
+
+                if (neighbor_value == 0) continue;
+                
+                count++;
+
+                species[neighbor_value - 1]++;
             }
         }
     }
+
+    int max = 0;
+
+    for (int i = 0; i < N_SPECIES; i++) {
+        if (species[i] > max) {
+            max = species[i];
+            *most_common_value = i + 1;
+        }
+    }
+
+    *alive_count = count;
 }
 
-// Function to update the grid and track max
-void update_grid_and_track_max(char ***grid, long long N, int64_t *species_max_counts, int64_t *species_max_gens, int generation) {
-    char ***temp_grid = malloc(N * sizeof(char **));
-    if (temp_grid == NULL) {
-        fprintf(stderr, "Failed to allocate temp_grid\n");
+void next_gen(char ***grid, int cells, long long *species_max_count, long long *species_max_count_generation) {
+    // Do a copy of the grid
+    char ***grid_temp = (char ***) malloc(cells * sizeof(char **));
+    if (grid_temp == NULL) {
+        fprintf(stderr, "Failed to allocate memory for grid temp\n");
         exit(EXIT_FAILURE);
     }
 
-    for (int x = 0; x < N; x++) {
-        temp_grid[x] = malloc(N * sizeof(char *));
-        if (temp_grid[x] == NULL) {
-            fprintf(stderr, "Failed to allocate temp_grid\n");
+    for (int i = 0; i < cells; i++) {
+        grid_temp[i] = (char **) malloc(cells * sizeof(char *));
+        if (grid_temp[i] == NULL) {
+            fprintf(stderr, "Failed to allocate memory for grid temp\n");
             exit(EXIT_FAILURE);
         }
 
-        temp_grid[x][0] = calloc(N * N, sizeof(char));
-        if (temp_grid[x][0] == NULL) {
-            fprintf(stderr, "Failed to allocate temp_grid\n");
-            exit(EXIT_FAILURE);
+        for (int j = 0; j < cells; j++) {
+            grid_temp[i][j] = (char *) malloc(cells * sizeof(char));
+            if (grid_temp[i][j] == NULL) {
+                fprintf(stderr, "Failed to allocate memory for grid temp\n");
+                exit(EXIT_FAILURE);
+            }
         }
-
-        for (int y = 1; y < N; y++) {
-            temp_grid[x][y] = temp_grid[x][0] + y * N;
+    }
+    
+    int x, y, z;
+    #pragma omp parallel for collapse(3) private(x, y, z)
+    for (int x = 0; x < cells; x++) {
+        for (int y = 0; y < cells; y++) {
+            for (int z = 0; z < cells; z++) {
+                grid_temp[x][y][z] = grid[x][y][z];
+            }
         }
     }
 
-    for (int x = 0; x < N; x++) {
-        for (int y = 0; y < N; y++) {
-            for (int z = 0; z < N; z++) {
-                int64_t neighbor_counts[N_SPECIES] = {0};
-                count_neighbors(grid, N, x, y, z, neighbor_counts);
+    // Update the grid
+    #pragma omp parallel for collapse(3) private(x, y, z)
+    for (x = 0; x < cells; x++) {
+        for (y = 0; y < cells; y++) {
+            for (z = 0; z < cells; z++) {
 
-                // Apply transition rules for live cell
-                if (grid[x][y][z] > 0) {
-                    int alive_neighbors = 0;
-                    for (int i = 0; i < N_SPECIES; i++) {
-                        if (neighbor_counts[i] > 0) {
-                            alive_neighbors += neighbor_counts[i];
-                            if (alive_neighbors > 13) {
-                                break; // Cell dies due to overcrowding
-                            }
-                        }
-                    }
-                    if (alive_neighbors >= 4 && alive_neighbors <= 13) {
-                        temp_grid[x][y][z] = grid[x][y][z]; // Remains alive
-                    } else {
-                        temp_grid[x][y][z] = 0; // Dies
-                    }
-                } else {
-                    // Apply transition rules for dead cell
-                    int total_neighbors = 0;
-                    for (int i = 0; i < N_SPECIES; i++) {
-                        total_neighbors += neighbor_counts[i];
-                    }
-                    if (total_neighbors >= 7 && total_neighbors <= 10) {
-                        int max_count = 0, max_species = 0;
-                        for (int i = 0; i < N_SPECIES; i++) {
-                            if (neighbor_counts[i] > max_count) {
-                                max_count = neighbor_counts[i];
-                                max_species = i + 1;
-                            }
-                        }
-                        temp_grid[x][y][z] = max_species; // Becomes the majority species
-                    } else {
-                        temp_grid[x][y][z] = 0; // Remains dead
+                int neighbors_species[N_SPECIES] = {0};
+                int neighbors_count = 0, neighbors_most_common_value = 0;
+                
+                count_neighbors(grid_temp, cells, x, y, z, neighbors_species, &neighbors_count, &neighbors_most_common_value);
+
+                // Dead cell
+                if (grid_temp[x][y][z] == 0) {
+                    if (neighbors_count >= 7 && neighbors_count <= 10) {
+                        grid[x][y][z] = neighbors_most_common_value;
                     }
                 }
 
-                // Update maximum population and generation for each species
-                int species = temp_grid[x][y][z];
-                if (species > 0) {
-                    if (neighbor_counts[species - 1] > species_max_counts[species - 1]) {
-                        species_max_counts[species - 1] = neighbor_counts[species - 1];
-                        species_max_gens[species - 1] = generation;
-                    } else if (neighbor_counts[species - 1] == species_max_counts[species - 1]) {
-                        if (generation < species_max_gens[species - 1]) {
-                            species_max_gens[species - 1] = generation;
-                        }
+                // Alive cell
+                else {
+                    if (neighbors_count <= 4 || neighbors_count > 13) {
+                        grid[x][y][z] = 0;
                     }
                 }
             }
         }
     }
 
-    // Free temporary grid memory
-    for (int x = 0; x < N; x++) {
-        free(temp_grid[x][0]);
-        free(temp_grid[x]);
+    // Free the copy
+    for (int i = 0; i < cells; i++) {
+        for (int j = 0; j < cells; j++) {
+            free(grid_temp[i][j]);
+        }
+        free(grid_temp[i]);
     }
-    free(temp_grid);
+    free(grid_temp);
+}
+
+void print_result_verbose(char ***grid, int cells) {
+    for (int x = 0; x < cells; x++) {
+        printf("Layer %d:\n", x);
+
+        for (int y = 0; y < cells; y++) {
+            for (int z = 0; z < cells; z++) {
+                if (grid[x][y][z] == 0) {
+                    printf("  ");
+                } else {
+                    printf("%d ", grid[x][y][z]);
+                }
+            }
+            printf("\n");
+        }
+        printf("\n");
+    }
+}
+
+void simulation(char ***grid, int cells, int generations, long long *species_max_count, long long *species_max_count_generation) {
+    // Generation 0 being the initial state
+    for (int i = 0; i < generations + 1; i++) {
+
+        if (i > 0) next_gen(grid, cells, species_max_count, species_max_count_generation);
+
+        // Initialize a temporary storage for species count to be used in reduction
+        long long species_temp[N_SPECIES] = {0};
+        
+        // Use OpenMP parallel for with reduction to sum up species counts
+        #pragma omp parallel
+        {
+            long long species_private[N_SPECIES] = {0}; // Each thread gets its own private counter
+
+            #pragma omp for nowait collapse(3)
+            for (int x = 0; x < cells; x++) {
+                for (int y = 0; y < cells; y++) {
+                    for (int z = 0; z < cells; z++) {
+                        if (grid[x][y][z] > 0) {
+                            species_private[grid[x][y][z] - 1]++;
+                        }
+                    }
+                }
+            }
+
+            // Reduce the private counters into the shared species_temp array
+            #pragma omp critical
+            for (int j = 0; j < N_SPECIES; j++) {
+                species_temp[j] += species_private[j];
+            }
+        }
+
+        // Update the global maximum species count if current generation's count is higher
+        for (int j = 0; j < N_SPECIES; j++) {
+            if (species_temp[j] > species_max_count[j]) {
+                species_max_count[j] = species_temp[j];
+                species_max_count_generation[j] = i;
+            }
+        }
+
+        if (debug) {
+            printf("Generation %d ------------------------------\n", i);
+            print_result_verbose(grid, cells);
+        }
+    }
+}
+
+
+void print_result(char ***grid, int cells, long long *species_max_count, long long *species_max_count_generation) {
+    for (int i = 0; i < N_SPECIES; i++) {
+        printf("%d %lld %lld\n", i + 1, species_max_count[i], species_max_count_generation[i]);
+    }
 }
 
 int main(int argc, char *argv[]) {
+
+    // Check for correct usage
     if (argc != 5) {
-        fprintf(stderr, "Usage: %s <grid_size> <density> <generations> <seed>\n", argv[0]);
+        fprintf(stderr, "Usage: %s <1: Positive Int> <2: Positive Int> <3: Float between 0 and 1> <4: Int>\n", argv[0]);
+        fprintf(stderr, "1: Number of generations\n");
+        fprintf(stderr, "2: Number of cells per side of the cube\n");
+        fprintf(stderr, "3: Density of the initial population\n");
+        fprintf(stderr, "4: Seed for the random number generator\n");
         return EXIT_FAILURE;
     }
 
-    long long N;
-    float density;
-    int generations;
-    int input_seed;
+    // Parse the input
+    int generations = atoi(argv[1]);
+    int cells = atoi(argv[2]);
+    float density = atof(argv[3]);
+    int seed = atoi(argv[4]);
 
-    // Parse and validate input arguments
-    if (sscanf(argv[1], "%lld", &N) != 1 || N <= 0) {
-        fprintf(stderr, "Invalid grid size\n");
+    // Print the input
+    if (debug) printf("Arguments: %d %d %f %d\n", generations, cells, density, seed);
+
+    // Allocate memory for the species
+    long long *species_max_count = calloc(N_SPECIES, sizeof(long long));
+    long long *species_max_count_generation = calloc(N_SPECIES, sizeof(long long));
+
+    if (species_max_count == NULL || species_max_count_generation == NULL) {
+        fprintf(stderr, "Failed to allocate memory for species\n");
         return EXIT_FAILURE;
     }
 
-    if (sscanf(argv[2], "%f", &density) != 1 || density < 0.0 || density > 1.0) {
-        fprintf(stderr, "Invalid density\n");
-        return EXIT_FAILURE;
-    }
+    // Generate the initial grid
+    char ***grid = gen_initial_grid(cells, density, seed);
 
-    if (sscanf(argv[3], "%d", &generations) != 1 || generations <= 0) {
-        fprintf(stderr, "Invalid number of generations\n");
-        return EXIT_FAILURE;
-    }
+    // Run the simulation and measure its execution time
+    double exec_time = -omp_get_wtime();
 
-    if (sscanf(argv[4], "%d", &input_seed) != 1) {
-        fprintf(stderr, "Invalid seed\n");
-        return EXIT_FAILURE;
-    }
+    simulation(grid, cells, generations, species_max_count, species_max_count_generation);
 
-    // Allocate memory for species maximum population and generation arrays
-    int64_t *species_max_counts = calloc(N_SPECIES, sizeof(int64_t));
-    if (species_max_counts == NULL) {
-        fprintf(stderr, "Failed to allocate species_max_counts\n");
-        return EXIT_FAILURE;
-    }
+    exec_time += omp_get_wtime();
 
-    int64_t *species_max_gens = calloc(N_SPECIES, sizeof(int64_t));
-    if (species_max_gens == NULL) {
-        free(species_max_counts);
-        fprintf(stderr, "Failed to allocate species_max_gens\n");
-        return EXIT_FAILURE;
-    }
+    // Print result
+    print_result(grid, cells, species_max_count, species_max_count_generation);
 
-    // Generate initial grid
-    char ***grid = gen_initial_grid(N, density, input_seed);
-
-    // Run simulation for specified generations
-    for (int gen = 0; gen < generations; gen++) {
-        // Update grid and track maximum population/generation for each species
-        update_grid_and_track_max(grid, N, species_max_counts, species_max_gens, gen);
-    }
-
-    // Print final output for each species with maximum population
-    for (int i = 0; i < N_SPECIES; i++) {
-        if (species_max_counts[i] > 0) {
-            printf("%d %lld %lld\n", i + 1, species_max_counts[i], species_max_gens[i]);
-        }
-    }
+    // Print execution time
+    fprintf(stderr, "%.1fs\n", exec_time);
 
     // Free allocated memory
-    for (int x = 0; x < N; x++) {
+    for (int x = 0; x < cells; x++) {
         free(grid[x][0]);
         free(grid[x]);
     }
     free(grid);
-    free(species_max_counts);
-    free(species_max_gens);
+
+    free(species_max_count);
+    free(species_max_count_generation);
 
     return EXIT_SUCCESS;
 }
