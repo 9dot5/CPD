@@ -109,7 +109,7 @@ void count_neighbors(char ***grid, int cells, int x, int y, int z, int *species,
     *alive_count = count;
 }
 
-void next_gen(char ***grid, int cells, long long *species_max_count, long long *species_max_count_generation) {
+void next_gen(char ***grid, int cells) {
     // Do a copy of the grid
     char ***grid_temp = (char ***) malloc(cells * sizeof(char **));
     if (grid_temp == NULL) {
@@ -200,7 +200,7 @@ void simulation(char ***grid, int cells, int generations, long long *species_max
     // Generation 0 being the initial state
     for (int i = 0; i < generations + 1; i++) {
 
-        if (i > 0) next_gen(grid, cells, species_max_count, species_max_count_generation);
+        if (i > 0) next_gen(grid, cells);
 
         // Update species
         long long species_temp[N_SPECIES] = {0};
